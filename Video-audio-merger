@@ -1,0 +1,8 @@
+{
+  "name": "video-audio-merger",
+  "version": "1.0.0",
+  "dependencies": {
+    "fluent-ffmpeg": "^2.1.2",
+    "axios": "^1.6.0"
+  }
+}
