@@ -2,40 +2,39 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const axios = require('axios');
 const fs = require('fs');
-const { promisify } = require('util');
-const writeFile = promisify(fs.writeFile);
-const unlink = promisify(fs.unlink);
 
-// Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { video_url, audio_base64 } = req.body;
+
+  if (!video_url || !audio_base64) {
+    return res.status(400).json({ 
+      error: 'Missing video_url or audio_base64' 
+    });
+  }
+
+  const tempDir = '/tmp';
+  const videoPath = `${tempDir}/video_${Date.now()}.mp4`;
+  const audioPath = `${tempDir}/audio_${Date.now()}.mp3`;
+  const mergedPath = `${tempDir}/merged_${Date.now()}.mp4`;
+
   try {
-    const video_url = req.query.video_url || req.body?.video_url;
-    const audio_base64 = req.query.audio_base64 || req.body?.audio_base64;
-
-    if (!video_url) {
-      return res.status(400).json({ error: 'video_url is required' });
-    }
-
-    if (!audio_base64) {
-      return res.status(400).json({ error: 'audio_base64 is required' });
-    }
-
     // Download video
-    const videoResponse = await axios.get(video_url, { responseType: 'arraybuffer' });
-    const videoPath = `/tmp/input_video_${Date.now()}.mp4`;
-    await writeFile(videoPath, videoResponse.data);
+    const videoResponse = await axios.get(video_url, {
+      responseType: 'arraybuffer'
+    });
+    fs.writeFileSync(videoPath, videoResponse.data);
 
-    // Decode base64 audio and save
+    // Save audio
     const audioBuffer = Buffer.from(audio_base64, 'base64');
-    const audioPath = `/tmp/input_audio_${Date.now()}.mp3`;
-    await writeFile(audioPath, audioBuffer);
+    fs.writeFileSync(audioPath, audioBuffer);
 
-    // Output path
-    const outputPath = `/tmp/output_${Date.now()}.mp4`;
-
-    // Merge video and audio
+    // Merge with FFmpeg
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(videoPath)
@@ -43,33 +42,45 @@ module.exports = async (req, res) => {
         .outputOptions([
           '-c:v copy',
           '-c:a aac',
+          '-strict experimental',
           '-shortest'
         ])
-        .output(outputPath)
+        .output(mergedPath)
         .on('end', resolve)
         .on('error', reject)
         .run();
     });
 
-    // Read merged video
-    const mergedVideo = await fs.promises.readFile(outputPath);
-    
-    // Cleanup
-    await Promise.all([
-      unlink(videoPath),
-      unlink(audioPath),
-      unlink(outputPath)
-    ]).catch(() => {});
+    // Check if binary format is requested
+    const returnBinary = req.query.format === 'binary';
 
-    // Return as base64
-    res.status(200).json({
-      success: true,
-      video: mergedVideo.toString('base64'),
-      size: mergedVideo.length
-    });
+    if (returnBinary) {
+      // Return as binary file (for direct upload to Dropbox)
+      const videoBuffer = fs.readFileSync(mergedPath);
+      
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', videoBuffer.length);
+      res.send(videoBuffer);
+    } else {
+      // Return as base64 JSON (current behavior)
+      const videoBase64 = fs.readFileSync(mergedPath, 'base64');
+      
+      res.json({
+        success: true,
+        video: videoBase64,
+        size: fs.statSync(mergedPath).size
+      });
+    }
+
+    // Cleanup
+    fs.unlinkSync(videoPath);
+    fs.unlinkSync(audioPath);
+    fs.unlinkSync(mergedPath);
 
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
   }
 };
