@@ -34,7 +34,7 @@ module.exports = async (req, res) => {
     const audioBuffer = Buffer.from(audio_base64, 'base64');
     fs.writeFileSync(audioPath, audioBuffer);
 
-    // Merge with FFmpeg
+    // Merge with FFmpeg (removed -shortest to preserve full video length)
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(videoPath)
@@ -42,8 +42,7 @@ module.exports = async (req, res) => {
         .outputOptions([
           '-c:v copy',
           '-c:a aac',
-          '-strict experimental',
-          '-shortest'
+          '-strict experimental'
         ])
         .output(mergedPath)
         .on('end', resolve)
@@ -51,24 +50,25 @@ module.exports = async (req, res) => {
         .run();
     });
 
+    // Read the merged video
+    const videoBuffer = fs.readFileSync(mergedPath);
+
     // Check if binary format is requested
     const returnBinary = req.query.format === 'binary';
 
     if (returnBinary) {
       // Return as binary file (for direct upload to Dropbox)
-      const videoBuffer = fs.readFileSync(mergedPath);
-      
       res.setHeader('Content-Type', 'video/mp4');
       res.setHeader('Content-Length', videoBuffer.length);
       res.send(videoBuffer);
     } else {
-      // Return as base64 JSON (current behavior)
-      const videoBase64 = fs.readFileSync(mergedPath, 'base64');
+      // Return as base64 JSON (default behavior)
+      const videoBase64 = videoBuffer.toString('base64');
       
       res.json({
         success: true,
         video: videoBase64,
-        size: fs.statSync(mergedPath).size
+        size: videoBuffer.length
       });
     }
 
