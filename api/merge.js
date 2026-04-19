@@ -1,13 +1,16 @@
 const ffmpeg = require('fluent-ffmpeg');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const axios = require('axios');
 const fs = require('fs');
 const { promisify } = require('util');
 const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 
+// Set ffmpeg path
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
 module.exports = async (req, res) => {
   try {
-    // Accept from query parameters OR body
     const video_url = req.query.video_url || req.body?.video_url;
     const audio_base64 = req.query.audio_base64 || req.body?.audio_base64;
 
