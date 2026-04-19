@@ -34,19 +34,32 @@ module.exports = async (req, res) => {
     const audioBuffer = Buffer.from(audio_base64, 'base64');
     fs.writeFileSync(audioPath, audioBuffer);
 
-    // Merge with FFmpeg (removed -shortest to preserve full video length)
+    // Merge with FFmpeg - explicitly map video and audio streams
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(videoPath)
         .input(audioPath)
         .outputOptions([
-          '-c:v copy',
-          '-c:a aac',
-          '-strict experimental'
+          '-map', '0:v:0',          // Use video from first input
+          '-map', '1:a:0',          // Use audio from second input
+          '-c:v', 'copy',           // Copy video codec
+          '-c:a', 'aac',            // Convert audio to AAC
+          '-b:a', '128k',           // Audio bitrate
+          '-shortest',              // Match shortest stream
+          '-strict', 'experimental'
         ])
         .output(mergedPath)
-        .on('end', resolve)
-        .on('error', reject)
+        .on('start', (commandLine) => {
+          console.log('FFmpeg command:', commandLine);
+        })
+        .on('end', () => {
+          console.log('Merge complete');
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err.message);
+          reject(err);
+        })
         .run();
     });
 
