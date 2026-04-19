@@ -1,21 +1,22 @@
 const ffmpeg = require('fluent-ffmpeg');
 const axios = require('axios');
 const fs = require('fs');
-const path = require('path');
 const { promisify } = require('util');
 const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 
 module.exports = async (req, res) => {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
   try {
-    const { video_url, audio_url } = req.body;
+    // Accept from query parameters OR body
+    const video_url = req.query.video_url || req.body?.video_url;
+    const audio_base64 = req.query.audio_base64 || req.body?.audio_base64;
 
-    if (!video_url || !audio_url) {
-      return res.status(400).json({ error: 'video_url and audio_url are required' });
+    if (!video_url) {
+      return res.status(400).json({ error: 'video_url is required' });
+    }
+
+    if (!audio_base64) {
+      return res.status(400).json({ error: 'audio_base64 is required' });
     }
 
     // Download video
@@ -23,10 +24,10 @@ module.exports = async (req, res) => {
     const videoPath = `/tmp/input_video_${Date.now()}.mp4`;
     await writeFile(videoPath, videoResponse.data);
 
-    // Download audio
-    const audioResponse = await axios.get(audio_url, { responseType: 'arraybuffer' });
+    // Decode base64 audio and save
+    const audioBuffer = Buffer.from(audio_base64, 'base64');
     const audioPath = `/tmp/input_audio_${Date.now()}.mp3`;
-    await writeFile(audioPath, audioResponse.data);
+    await writeFile(audioPath, audioBuffer);
 
     // Output path
     const outputPath = `/tmp/output_${Date.now()}.mp4`;
