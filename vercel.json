@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/kenburns.js": {
+      "maxDuration": 60
+    }
+  }
+}
