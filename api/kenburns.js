@@ -12,7 +12,6 @@ function normalizeString(value, fallback = '') {
   if (value === undefined || value === null) return fallback;
   let v = String(value).trim();
 
-  // Remove wrapping quotes if Make sends values like: "slow_zoom_out"
   if (
     (v.startsWith('"') && v.endsWith('"')) ||
     (v.startsWith("'") && v.endsWith("'"))
@@ -27,110 +26,32 @@ function clamp(num, min, max) {
   return Math.max(min, Math.min(max, num));
 }
 
-function getProfile(imageType) {
-  switch (imageType) {
-    case 'detail':
-      return {
-        zoomStart: 1.06,
-        zoomEnd: 1.12,
-        panSpeed: 0.12
-      };
-    case 'chart':
-      return {
-        zoomStart: 1.01,
-        zoomEnd: 1.04,
-        panSpeed: 0.08
-      };
-    case 'portrait':
-      return {
-        zoomStart: 1.04,
-        zoomEnd: 1.10,
-        panSpeed: 0.10
-      };
-    case 'wide':
-    default:
-      return {
-        zoomStart: 1.02,
-        zoomEnd: 1.08,
-        panSpeed: 0.10
-      };
-  }
-}
+function buildFilter({ motion, width, height, duration, fps }) {
+  // We avoid zoompan because it often causes jitter/strobe on stills.
+  // Instead we animate with scale=eval=frame and then crop center.
 
-function buildFilter({ motion, imageType, width, height, duration, fps }) {
-  const frames = duration * fps;
-  const profile = getProfile(imageType);
+  const zoomAmount = 0.06; // 6% total zoom over the clip
+  const durationSec = duration;
 
-  // Use a slightly larger virtual canvas to reduce visible jitter
-  // and give room for pan/crop movement.
-  const canvasW = Math.round(width * 1.18);
-  const canvasH = Math.round(height * 1.18);
+  let scaleExprW;
+  let scaleExprH;
 
-  const zoomStart = profile.zoomStart;
-  const zoomEnd = profile.zoomEnd;
-  const zoomStep = (zoomEnd - zoomStart) / frames;
-  const panSpeed = profile.panSpeed;
-
-  let zExpr;
-  let xExpr;
-  let yExpr;
-
-  switch (motion) {
-    case 'slow_zoom_out':
-      zExpr = `'if(lte(on,1),${zoomEnd.toFixed(5)},max(${zoomStart.toFixed(5)},zoom-${zoomStep.toFixed(7)}))'`;
-      xExpr = `'${((canvasW - width) / 2).toFixed(2)}'`;
-      yExpr = `'${((canvasH - height) / 2).toFixed(2)}'`;
-      break;
-
-    case 'pan_left':
-      zExpr = `'${Math.max(1.02, zoomStart).toFixed(5)}'`;
-      xExpr = `'max(0,${(canvasW - width).toFixed(2)} / 2 - on*${panSpeed.toFixed(4)})'`;
-      yExpr = `'${((canvasH - height) / 2).toFixed(2)}'`;
-      break;
-
-    case 'pan_right':
-      zExpr = `'${Math.max(1.02, zoomStart).toFixed(5)}'`;
-      xExpr = `'min(${(canvasW - width).toFixed(2)},${(canvasW - width).toFixed(2)} / 2 + on*${panSpeed.toFixed(4)})'`;
-      yExpr = `'${((canvasH - height) / 2).toFixed(2)}'`;
-      break;
-
-    case 'drift_up':
-      zExpr = `'${Math.max(1.02, zoomStart).toFixed(5)}'`;
-      xExpr = `'${((canvasW - width) / 2).toFixed(2)}'`;
-      yExpr = `'max(0,${(canvasH - height).toFixed(2)} / 2 - on*${panSpeed.toFixed(4)})'`;
-      break;
-
-    case 'drift_down':
-      zExpr = `'${Math.max(1.02, zoomStart).toFixed(5)}'`;
-      xExpr = `'${((canvasW - width) / 2).toFixed(2)}'`;
-      yExpr = `'min(${(canvasH - height).toFixed(2)},${(canvasH - height).toFixed(2)} / 2 + on*${panSpeed.toFixed(4)})'`;
-      break;
-
-    case 'diagonal_soft':
-      zExpr = `'if(lte(on,1),${zoomStart.toFixed(5)},min(${zoomEnd.toFixed(5)},zoom+${zoomStep.toFixed(7)}))'`;
-      xExpr = `'min(${(canvasW - width).toFixed(2)},${(canvasW - width).toFixed(2)} / 2 + on*${(panSpeed * 0.55).toFixed(4)})'`;
-      yExpr = `'max(0,${(canvasH - height).toFixed(2)} / 2 - on*${(panSpeed * 0.40).toFixed(4)})'`;
-      break;
-
-    case 'slow_zoom_in':
-    default:
-      zExpr = `'if(lte(on,1),${zoomStart.toFixed(5)},min(${zoomEnd.toFixed(5)},zoom+${zoomStep.toFixed(7)}))'`;
-      xExpr = `'${((canvasW - width) / 2).toFixed(2)}'`;
-      yExpr = `'${((canvasH - height) / 2).toFixed(2)}'`;
-      break;
+  if (motion === 'slow_zoom_out') {
+    // Start slightly zoomed in, then slowly zoom out to 1.0
+    scaleExprW = `'${Math.round(width * (1 + zoomAmount))} - (${Math.round(width * zoomAmount)}*t/${durationSec})'`;
+    scaleExprH = `'${Math.round(height * (1 + zoomAmount))} - (${Math.round(height * zoomAmount)}*t/${durationSec})'`;
+  } else {
+    // Start normal, then slowly zoom in
+    scaleExprW = `'${width} + (${Math.round(width * zoomAmount)}*t/${durationSec})'`;
+    scaleExprH = `'${height} + (${Math.round(height * zoomAmount)}*t/${durationSec})'`;
   }
 
-  return (
-    `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,` +
-    `crop=${canvasW}:${canvasH},` +
-    `zoompan=` +
-    `z=${zExpr}:` +
-    `d=${frames}:` +
-    `x=${xExpr}:` +
-    `y=${yExpr}:` +
-    `s=${width}x${height}:` +
-    `fps=${fps}`
-  );
+  return [
+    `fps=${fps}`,
+    `scale=w=${scaleExprW}:h=${scaleExprH}:eval=frame:flags=lanczos`,
+    `crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2`,
+    `setsar=1`
+  ].join(',');
 }
 
 module.exports = async (req, res) => {
@@ -143,20 +64,24 @@ module.exports = async (req, res) => {
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed'
+    });
   }
 
   try {
     const body = req.body || {};
 
     const image_url = normalizeString(body.image_url);
-    const motion = normalizeString(body.motion, 'slow_zoom_in');
-    const image_type = normalizeString(body.image_type, 'wide');
+    const requestedMotion = normalizeString(body.motion, 'slow_zoom_in');
+    const output_name = normalizeString(body.output_name, '');
 
     const duration = clamp(Number(body.duration) || 6, 3, 12);
     const width = clamp(Number(body.width) || 1920, 640, 3840);
     const height = clamp(Number(body.height) || 1080, 360, 2160);
-    const fps = 30;
+
+    const fps = 60;
 
     if (!image_url) {
       return res.status(400).json({
@@ -165,20 +90,8 @@ module.exports = async (req, res) => {
       });
     }
 
-    const supportedMotions = [
-      'slow_zoom_in',
-      'slow_zoom_out',
-      'pan_left',
-      'pan_right',
-      'drift_up',
-      'drift_down',
-      'diagonal_soft'
-    ];
-
-    const supportedImageTypes = ['wide', 'detail', 'chart', 'portrait'];
-
-    const finalMotion = supportedMotions.includes(motion) ? motion : 'slow_zoom_in';
-    const finalImageType = supportedImageTypes.includes(image_type) ? image_type : 'wide';
+    const motion =
+      requestedMotion === 'slow_zoom_out' ? 'slow_zoom_out' : 'slow_zoom_in';
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kenburns-'));
     const inputPath = path.join(tmpDir, 'input.jpg');
@@ -193,8 +106,7 @@ module.exports = async (req, res) => {
       fs.writeFileSync(inputPath, imageResp.data);
 
       const filter = buildFilter({
-        motion: finalMotion,
-        imageType: finalImageType,
+        motion,
         width,
         height,
         duration,
@@ -204,7 +116,10 @@ module.exports = async (req, res) => {
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(inputPath)
-          .inputOptions(['-loop', '1'])
+          .inputOptions([
+            '-loop', '1',
+            '-framerate', String(fps)
+          ])
           .outputOptions([
             '-vf', filter,
             '-t', String(duration),
@@ -213,8 +128,7 @@ module.exports = async (req, res) => {
             '-preset', 'medium',
             '-crf', '18',
             '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
-            '-tune', 'stillimage'
+            '-movflags', '+faststart'
           ])
           .output(outputPath)
           .on('end', resolve)
@@ -225,7 +139,7 @@ module.exports = async (req, res) => {
       const videoBuffer = fs.readFileSync(outputPath);
 
       const fileName =
-        normalizeString(body.output_name) ||
+        output_name ||
         `kenburns/${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`;
 
       const blob = await put(fileName, videoBuffer, {
@@ -239,14 +153,15 @@ module.exports = async (req, res) => {
         video_url: blob.url,
         pathname: blob.pathname,
         duration,
-        motion: finalMotion,
-        image_type: finalImageType
+        motion
       });
     } finally {
       try {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+        if (fs.existsSync(tmpDir)) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
       } catch (cleanupError) {
         console.error('Cleanup error:', cleanupError);
       }
